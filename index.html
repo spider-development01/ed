@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Camera & TTS Stream</title>
+    <!-- PeerJS for WebRTC -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --bg: #121212;
+            --surface: #1e1e1e;
+            --primary: #bb86fc;
+            --primary-hover: #9c4dcc;
+            --success: #03dac6;
+            --error: #cf6679;
+            --text: #ffffff;
+            --text-muted: #b3b3b3;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .card {
+            background: var(--surface);
+            width: 100%;
+            max-width: 500px;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        h1 { font-size: 1.5rem; margin-bottom: 10px; color: var(--primary); }
+        p { color: var(--text-muted); margin-bottom: 20px; font-size: 0.95rem; }
+
+        .btn {
+            background: var(--primary);
+            color: #000;
+            border: none;
+            padding: 12px 20px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        .btn:hover { background: var(--primary-hover); color: white; }
+        .btn:disabled { background: #555; cursor: not-allowed; }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #333;
+            background: #2c2c2c;
+            color: white;
+            border-radius: 6px;
+            font-size: 1rem;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: var(--primary); }
+
+        .pin-display {
+            background: #000;
+            padding: 15px;
+            font-size: 2rem;
+            letter-spacing: 5px;
+            border-radius: 8px;
+            color: var(--success);
+            margin-bottom: 10px;
+            cursor: pointer;
+            border: 1px dashed var(--success);
+            transition: 0.2s;
+        }
+        .pin-display:hover { background: rgba(3, 218, 198, 0.1); }
+
+        video {
+            width: 100%;
+            border-radius: 8px;
+            background: #000;
+            margin-top: 15px;
+            aspect-ratio: 16/9;
+            object-fit: cover;
+        }
+
+        .status { margin-top: 15px; font-size: 0.9rem; font-weight: bold; }
+        .status.success { color: var(--success); }
+        .status.error { color: var(--error); }
+        .status.wait { color: var(--text-muted); }
+
+        .hidden { display: none !important; }
+
+        .subtitle-box {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-style: italic;
+            color: #fff;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- STEP 1: SELECT ROLE -->
+    <div class="card" id="step-role">
+        <h1>Remote Cam & Voice</h1>
+        <p>Choose the role for this device.</p>
+        <button class="btn" onclick="initSender()">📹 Live Camera (Sends Video & Text)</button>
+        <button class="btn" onclick="initReceiver()">🎙️ Recorder (Plays Video & Audio)</button>
+    </div>
+
+    <!-- SENDER UI -->
+    <div class="card hidden" id="ui-sender">
+        <h1>Live Camera</h1>
+        <p>Share this PIN with the Recorder PC.</p>
+        
+        <div class="pin-display" id="sender-pin" onclick="copyPin()">----</div>
+        <div class="status wait" id="sender-status">Initializing camera...</div>
+        
+        <video id="local-video" autoplay muted playsinline></video>
+        
+        <div class="input-group" style="margin-top: 20px;">
+            <input type="text" id="text-input" placeholder="Type text to speak..." onkeypress="handleEnter(event)">
+            <button class="btn" style="width: auto;" onclick="sendText()" id="send-btn" disabled>Send</button>
+        </div>
+    </div>
+
+    <!-- RECEIVER UI -->
+    <div class="card hidden" id="ui-receiver">
+        <h1>Recorder</h1>
+        <p>Make sure your device volume is turned up!</p>
+        
+        <div class="input-group">
+            <input type="text" id="pin-input" placeholder="Enter PIN..." maxlength="4" autocomplete="off">
+            <button class="btn" style="width: auto;" onclick="connectToSender()">Connect</button>
+        </div>
+        
+        <div class="status wait" id="receiver-status">Waiting to connect...</div>
+        
+        <video id="remote-video" autoplay playsinline></video>
+        
+        <div class="subtitle-box" id="subtitle-display">Waiting for messages...</div>
+    </div>
+
+    <script>
+        const APP_PREFIX = "remote-tts-cam-";
+        
+        let peer = null;
+        let dataConn = null;
+        let localStream = null;
+        let myPin = "";
+        
+        // TTS Variables
+        let currentUtterance = null; 
+        let preferredVoice = null;
+
+        // --- UI Navigation ---
+        function showScreen(id) {
+            document.getElementById('step-role').classList.add('hidden');
+            document.getElementById('ui-sender').classList.add('hidden');
+            document.getElementById('ui-receiver').classList.add('hidden');
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function setStatus(elementId, msg, type) {
+            const el = document.getElementById(elementId);
+            el.innerText = msg;
+            el.className = `status ${type}`;
+        }
+
+        // ==========================================
+        // VOICE SELECTION ENGINE (Finds the most human voice)
+        // ==========================================
+        function loadVoices() {
+            if (!('speechSynthesis' in window)) return;
+            const voices = window.speechSynthesis.getVoices();
+            
+            // Try to find natural sounding Google, Microsoft, or Apple voices
+            preferredVoice = voices.find(v => 
+                v.name.includes('Google US English') || 
+                v.name.includes('Microsoft Zira') || 
+                v.name.includes('Microsoft Mark') ||
+                v.name.includes('Samantha') || 
+                v.name.includes('Natural')
+            );
+            
+            // Fallback to first available English voice, or just the default
+            if (!preferredVoice) {
+                preferredVoice = voices.find(v => v.lang.startsWith('en')) || voices[0];
+            }
+        }
+        
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+
+        // ==========================================
+        // SENDER (CAMERA) LOGIC
+        // ==========================================
+        async function initSender() {
+            showScreen('ui-sender');
+            myPin = Math.floor(1000 + Math.random() * 9000).toString();
+            document.getElementById('sender-pin').innerText = myPin;
+
+            peer = new Peer(APP_PREFIX + myPin);
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById('local-video').srcObject = localStream;
+                setStatus('sender-status', 'Waiting for Recorder to connect...', 'wait');
+            } catch (err) {
+                setStatus('sender-status', 'Camera access denied or unavailable.', 'error');
+                return;
+            }
+
+            peer.on('connection', conn => {
+                dataConn = conn;
+                
+                dataConn.on('open', () => {
+                    setStatus('sender-status', '✅ Recorder Connected!', 'success');
+                    document.getElementById('send-btn').disabled = false;
+                    peer.call(dataConn.peer, localStream);
+                });
+
+                dataConn.on('close', () => {
+                    setStatus('sender-status', 'Recorder disconnected.', 'error');
+                    document.getElementById('send-btn').disabled = true;
+                });
+            });
+        }
+
+        function copyPin() {
+            navigator.clipboard.writeText(myPin);
+            const pinEl = document.getElementById('sender-pin');
+            pinEl.style.color = "white";
+            setTimeout(() => pinEl.style.color = "var(--success)", 500);
+        }
+
+        function sendText() {
+            const input = document.getElementById('text-input');
+            const text = input.value.trim();
+            if (!text || !dataConn || !dataConn.open) return;
+            
+            dataConn.send(text);
+            input.value = ''; 
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendText();
+        }
+
+        // ==========================================
+        // RECEIVER (RECORDER) LOGIC
+        // ==========================================
+        function initReceiver() {
+            showScreen('ui-receiver');
+            peer = new Peer(); 
+            loadVoices(); // Load voices immediately
+        }
+
+        function connectToSender() {
+            const pin = document.getElementById('pin-input').value.trim();
+            if (pin.length !== 4) {
+                setStatus('receiver-status', 'Please enter a valid 4-digit PIN.', 'error');
+                return;
+            }
+
+            // CRITICAL BROWSER POLICY FIX: Unlock Audio System on Click
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.resume();
+                const unlockAudio = new SpeechSynthesisUtterance('');
+                window.speechSynthesis.speak(unlockAudio);
+            }
+
+            setStatus('receiver-status', 'Connecting...', 'wait');
+            const targetId = APP_PREFIX + pin;
+
+            dataConn = peer.connect(targetId);
+            
+            dataConn.on('open', () => {
+                setStatus('receiver-status', '✅ Connected! Waiting for video...', 'success');
+            });
+
+            dataConn.on('data', data => {
+                console.log("Received Data:", data); // Debugging
+                speakText(data);
+            });
+
+            dataConn.on('close', () => {
+                setStatus('receiver-status', 'Camera PC disconnected.', 'error');
+                document.getElementById('remote-video').srcObject = null;
+            });
+
+            peer.on('call', call => {
+                call.answer(); 
+                
+                call.on('stream', remoteStream => {
+                    document.getElementById('remote-video').srcObject = remoteStream;
+                    setStatus('receiver-status', '✅ Receiving Video & Audio Data!', 'success');
+                });
+            });
+
+            peer.on('error', err => {
+                if (err.type === 'peer-unavailable') {
+                    setStatus('receiver-status', 'PIN not found. Ensure Camera PC is open.', 'error');
+                } else {
+                    setStatus('receiver-status', 'Connection error: ' + err.message, 'error');
+                }
+            });
+        }
+
+        function speakText(text) {
+            // Update the UI so we can physically see the text arrived
+            document.getElementById('subtitle-display').innerText = `💬 "${text}"`;
+
+            if ('speechSynthesis' in window) {
+                // Cancel any currently speaking text to prioritize the new one
+                window.speechSynthesis.cancel(); 
+                
+                currentUtterance = new SpeechSynthesisUtterance(text);
+                
+                if (preferredVoice) {
+                    currentUtterance.voice = preferredVoice;
+                }
+
+                // Adjust pitch and rate for natural sound
+                currentUtterance.pitch = 1.0; 
+                currentUtterance.rate = 1.0;  
+
+                window.speechSynthesis.speak(currentUtterance);
+                
+                // Keep speech engine awake (Fix for Chrome bug)
+                window.speechSynthesis.resume();
+            } else {
+                alert("Text-to-Speech not supported in this browser.");
+            }
+        }
+    </script>
+</body>
+</html>
