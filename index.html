@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Camera & TTS Stream</title>
+    <title>Remote Control Camera & Voice</title>
     <!-- PeerJS for WebRTC -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
@@ -34,14 +34,14 @@
         .card {
             background: var(--surface);
             width: 100%;
-            max-width: 500px;
+            max-width: 600px;
             padding: 30px;
             border-radius: 12px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
             text-align: center;
         }
 
-        h1 { font-size: 1.5rem; margin-bottom: 10px; color: var(--primary); }
+        h1 { font-size: 1.8rem; margin-bottom: 10px; color: var(--primary); }
         p { color: var(--text-muted); margin-bottom: 20px; font-size: 0.95rem; }
 
         .btn {
@@ -64,6 +64,7 @@
             display: flex;
             gap: 10px;
             margin-bottom: 15px;
+            width: 100%;
         }
 
         input[type="text"] {
@@ -81,14 +82,15 @@
         .pin-display {
             background: #000;
             padding: 15px;
-            font-size: 2rem;
-            letter-spacing: 5px;
+            font-size: 2.5rem;
+            letter-spacing: 8px;
             border-radius: 8px;
             color: var(--success);
             margin-bottom: 10px;
             cursor: pointer;
             border: 1px dashed var(--success);
             transition: 0.2s;
+            font-weight: bold;
         }
         .pin-display:hover { background: rgba(3, 218, 198, 0.1); }
 
@@ -99,9 +101,10 @@
             margin-top: 15px;
             aspect-ratio: 16/9;
             object-fit: cover;
+            border: 2px solid #333;
         }
 
-        .status { margin-top: 15px; font-size: 0.9rem; font-weight: bold; }
+        .status { margin-top: 15px; font-size: 0.95rem; font-weight: bold; }
         .status.success { color: var(--success); }
         .status.error { color: var(--error); }
         .status.wait { color: var(--text-muted); }
@@ -113,13 +116,14 @@
             padding: 15px;
             background: rgba(255, 255, 255, 0.1);
             border-radius: 8px;
-            font-size: 1.1rem;
+            font-size: 1.2rem;
             font-style: italic;
             color: #fff;
-            min-height: 50px;
+            min-height: 60px;
             display: flex;
             align-items: center;
             justify-content: center;
+            border-left: 4px solid var(--primary);
         }
     </style>
 </head>
@@ -127,47 +131,50 @@
 
     <!-- STEP 1: SELECT ROLE -->
     <div class="card" id="step-role">
-        <h1>Remote Cam & Voice</h1>
-        <p>Choose the role for this device.</p>
-        <button class="btn" onclick="initSender()">📹 Live Camera (Sends Video & Text)</button>
-        <button class="btn" onclick="initReceiver()">🎙️ Recorder (Plays Video & Audio)</button>
+        <h1>Remote TTS System</h1>
+        <p>Choose the role for this specific computer.</p>
+        <button class="btn" onclick="initController()">⌨️ Controller (Type Text & Watch Camera)</button>
+        <button class="btn" onclick="initRecorder()">🎙️ Recorder (Use Webcam & Speak Audio)</button>
     </div>
 
-    <!-- SENDER UI -->
-    <div class="card hidden" id="ui-sender">
-        <h1>Live Camera</h1>
-        <p>Share this PIN with the Recorder PC.</p>
+    <!-- CONTROLLER UI (Types Text, Receives Video) -->
+    <div class="card hidden" id="ui-controller">
+        <h1>Controller</h1>
+        <p>Give this PIN to the Recorder PC so it can connect to you.</p>
         
-        <div class="pin-display" id="sender-pin" onclick="copyPin()">----</div>
-        <div class="status wait" id="sender-status">Initializing camera...</div>
+        <div class="pin-display" id="controller-pin" onclick="copyPin()">----</div>
+        <div class="status wait" id="controller-status">Waiting for Recorder to connect...</div>
         
-        <video id="local-video" autoplay muted playsinline></video>
+        <!-- Video from the Recorder PC -->
+        <video id="remote-video" autoplay playsinline></video>
         
         <div class="input-group" style="margin-top: 20px;">
-            <input type="text" id="text-input" placeholder="Type text to speak..." onkeypress="handleEnter(event)">
+            <input type="text" id="text-input" placeholder="Type text for the Recorder to speak..." onkeypress="handleEnter(event)">
             <button class="btn" style="width: auto;" onclick="sendText()" id="send-btn" disabled>Send</button>
         </div>
     </div>
 
-    <!-- RECEIVER UI -->
-    <div class="card hidden" id="ui-receiver">
+    <!-- RECORDER UI (Provides Camera, Receives Text/Audio) -->
+    <div class="card hidden" id="ui-recorder">
         <h1>Recorder</h1>
-        <p>Make sure your device volume is turned up!</p>
+        <p>Enter the PIN from the Controller PC to link your camera and speaker.</p>
         
         <div class="input-group">
-            <input type="text" id="pin-input" placeholder="Enter PIN..." maxlength="4" autocomplete="off">
-            <button class="btn" style="width: auto;" onclick="connectToSender()">Connect</button>
+            <input type="text" id="pin-input" placeholder="e.g. 1234" maxlength="4" autocomplete="off">
+            <button class="btn" style="width: auto;" id="connect-btn" onclick="connectToController()" disabled>Connect</button>
         </div>
         
-        <div class="status wait" id="receiver-status">Waiting to connect...</div>
+        <div class="status wait" id="recorder-status">Initializing local camera...</div>
         
-        <video id="remote-video" autoplay playsinline></video>
+        <!-- Local Camera Feed -->
+        <video id="local-video" autoplay muted playsinline></video>
         
-        <div class="subtitle-box" id="subtitle-display">Waiting for messages...</div>
+        <!-- Subtitles for what is being spoken -->
+        <div class="subtitle-box hidden" id="subtitle-display">Waiting for messages...</div>
     </div>
 
     <script>
-        const APP_PREFIX = "remote-tts-cam-";
+        const APP_PREFIX = "rem-cam-tts-";
         
         let peer = null;
         let dataConn = null;
@@ -181,8 +188,8 @@
         // --- UI Navigation ---
         function showScreen(id) {
             document.getElementById('step-role').classList.add('hidden');
-            document.getElementById('ui-sender').classList.add('hidden');
-            document.getElementById('ui-receiver').classList.add('hidden');
+            document.getElementById('ui-controller').classList.add('hidden');
+            document.getElementById('ui-recorder').classList.add('hidden');
             document.getElementById(id).classList.remove('hidden');
         }
 
@@ -193,13 +200,11 @@
         }
 
         // ==========================================
-        // VOICE SELECTION ENGINE (Finds the most human voice)
+        // VOICE SELECTION ENGINE
         // ==========================================
         function loadVoices() {
             if (!('speechSynthesis' in window)) return;
             const voices = window.speechSynthesis.getVoices();
-            
-            // Try to find natural sounding Google, Microsoft, or Apple voices
             preferredVoice = voices.find(v => 
                 v.name.includes('Google US English') || 
                 v.name.includes('Microsoft Zira') || 
@@ -207,55 +212,63 @@
                 v.name.includes('Samantha') || 
                 v.name.includes('Natural')
             );
-            
-            // Fallback to first available English voice, or just the default
             if (!preferredVoice) {
                 preferredVoice = voices.find(v => v.lang.startsWith('en')) || voices[0];
             }
         }
-        
         if ('speechSynthesis' in window) {
             window.speechSynthesis.onvoiceschanged = loadVoices;
         }
 
         // ==========================================
-        // SENDER (CAMERA) LOGIC
+        // CONTROLLER LOGIC (PC 1)
         // ==========================================
-        async function initSender() {
-            showScreen('ui-sender');
+        function initController() {
+            showScreen('ui-controller');
+            
+            // Generate a 4-digit PIN
             myPin = Math.floor(1000 + Math.random() * 9000).toString();
-            document.getElementById('sender-pin').innerText = myPin;
+            document.getElementById('controller-pin').innerText = myPin;
 
+            // Host the connection
             peer = new Peer(APP_PREFIX + myPin);
 
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                document.getElementById('local-video').srcObject = localStream;
-                setStatus('sender-status', 'Waiting for Recorder to connect...', 'wait');
-            } catch (err) {
-                setStatus('sender-status', 'Camera access denied or unavailable.', 'error');
-                return;
-            }
-
+            // 1. Wait for Recorder to open a text chat connection
             peer.on('connection', conn => {
                 dataConn = conn;
                 
                 dataConn.on('open', () => {
-                    setStatus('sender-status', '✅ Recorder Connected!', 'success');
+                    setStatus('controller-status', '✅ Recorder Connected! You can now send text.', 'success');
                     document.getElementById('send-btn').disabled = false;
-                    peer.call(dataConn.peer, localStream);
                 });
 
                 dataConn.on('close', () => {
-                    setStatus('sender-status', 'Recorder disconnected.', 'error');
+                    setStatus('controller-status', '❌ Recorder disconnected.', 'error');
                     document.getElementById('send-btn').disabled = true;
+                    document.getElementById('remote-video').srcObject = null;
                 });
+            });
+
+            // 2. Wait for Recorder to call us with their Video Stream
+            peer.on('call', call => {
+                // Answer the call without sending our own video
+                call.answer(); 
+                
+                // Display the remote camera feed
+                call.on('stream', remoteStream => {
+                    document.getElementById('remote-video').srcObject = remoteStream;
+                    setStatus('controller-status', '✅ Receiving Live Video & Ready to Send Text!', 'success');
+                });
+            });
+
+            peer.on('error', err => {
+                setStatus('controller-status', 'Error: ' + err.message, 'error');
             });
         }
 
         function copyPin() {
             navigator.clipboard.writeText(myPin);
-            const pinEl = document.getElementById('sender-pin');
+            const pinEl = document.getElementById('controller-pin');
             pinEl.style.color = "white";
             setTimeout(() => pinEl.style.color = "var(--success)", 500);
         }
@@ -274,87 +287,88 @@
         }
 
         // ==========================================
-        // RECEIVER (RECORDER) LOGIC
+        // RECORDER LOGIC (PC 2)
         // ==========================================
-        function initReceiver() {
-            showScreen('ui-receiver');
-            peer = new Peer(); 
-            loadVoices(); // Load voices immediately
+        async function initRecorder() {
+            showScreen('ui-recorder');
+            peer = new Peer(); // Random ID for the Recorder
+            loadVoices(); 
+
+            // Get the local camera immediately so the actor can see themselves
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById('local-video').srcObject = localStream;
+                setStatus('recorder-status', 'Camera active. Enter the PIN to connect.', 'success');
+                document.getElementById('connect-btn').disabled = false; // Enable connect button
+            } catch (err) {
+                setStatus('recorder-status', '❌ Camera access denied or unavailable.', 'error');
+            }
         }
 
-        function connectToSender() {
+        function connectToController() {
             const pin = document.getElementById('pin-input').value.trim();
             if (pin.length !== 4) {
-                setStatus('receiver-status', 'Please enter a valid 4-digit PIN.', 'error');
+                setStatus('recorder-status', 'Please enter a valid 4-digit PIN.', 'error');
+                return;
+            }
+            if (!localStream) {
+                setStatus('recorder-status', 'Cannot connect without camera access.', 'error');
                 return;
             }
 
-            // CRITICAL BROWSER POLICY FIX: Unlock Audio System on Click
+            // CRITICAL BROWSER POLICY FIX: Unlock Audio System on User Click
             if ('speechSynthesis' in window) {
                 window.speechSynthesis.resume();
                 const unlockAudio = new SpeechSynthesisUtterance('');
                 window.speechSynthesis.speak(unlockAudio);
             }
 
-            setStatus('receiver-status', 'Connecting...', 'wait');
+            setStatus('recorder-status', 'Connecting to Controller...', 'wait');
             const targetId = APP_PREFIX + pin;
 
+            // 1. Connect Data Channel to receive text
             dataConn = peer.connect(targetId);
             
             dataConn.on('open', () => {
-                setStatus('receiver-status', '✅ Connected! Waiting for video...', 'success');
+                setStatus('recorder-status', '✅ Connected! Waiting for text...', 'success');
+                document.getElementById('subtitle-display').classList.remove('hidden');
+                
+                // 2. Once data is connected, CALL the Controller to send our video stream
+                peer.call(targetId, localStream);
             });
 
+            // 3. Listen for text messages
             dataConn.on('data', data => {
-                console.log("Received Data:", data); // Debugging
                 speakText(data);
             });
 
             dataConn.on('close', () => {
-                setStatus('receiver-status', 'Camera PC disconnected.', 'error');
-                document.getElementById('remote-video').srcObject = null;
-            });
-
-            peer.on('call', call => {
-                call.answer(); 
-                
-                call.on('stream', remoteStream => {
-                    document.getElementById('remote-video').srcObject = remoteStream;
-                    setStatus('receiver-status', '✅ Receiving Video & Audio Data!', 'success');
-                });
+                setStatus('recorder-status', '❌ Controller disconnected.', 'error');
             });
 
             peer.on('error', err => {
                 if (err.type === 'peer-unavailable') {
-                    setStatus('receiver-status', 'PIN not found. Ensure Camera PC is open.', 'error');
+                    setStatus('recorder-status', '❌ PIN not found. Ensure Controller is open.', 'error');
                 } else {
-                    setStatus('receiver-status', 'Connection error: ' + err.message, 'error');
+                    setStatus('recorder-status', '❌ Connection error: ' + err.message, 'error');
                 }
             });
         }
 
         function speakText(text) {
-            // Update the UI so we can physically see the text arrived
+            // Display Subtitles
             document.getElementById('subtitle-display').innerText = `💬 "${text}"`;
 
             if ('speechSynthesis' in window) {
-                // Cancel any currently speaking text to prioritize the new one
-                window.speechSynthesis.cancel(); 
+                window.speechSynthesis.cancel(); // Stop current speech if typed fast
                 
                 currentUtterance = new SpeechSynthesisUtterance(text);
-                
-                if (preferredVoice) {
-                    currentUtterance.voice = preferredVoice;
-                }
-
-                // Adjust pitch and rate for natural sound
+                if (preferredVoice) currentUtterance.voice = preferredVoice;
                 currentUtterance.pitch = 1.0; 
                 currentUtterance.rate = 1.0;  
 
                 window.speechSynthesis.speak(currentUtterance);
-                
-                // Keep speech engine awake (Fix for Chrome bug)
-                window.speechSynthesis.resume();
+                window.speechSynthesis.resume(); // Fix for Chrome pausing bug
             } else {
                 alert("Text-to-Speech not supported in this browser.");
             }
